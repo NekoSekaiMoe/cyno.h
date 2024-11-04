@@ -1,64 +1,76 @@
-#ifndef CYNO_H
-#define CYNO_H
+#pragma once
 
 #include <crow.h>
+#include <openssl/sha.h>  // For SHA-1 hashing
 #include <string>
-#include <chrono>
-#include <iomanip>
 #include <sstream>
-#include <openssl/sha.h>
+#include <iomanip>
+#include <chrono>
 
-class Cyno {
+class CynoHandler {
 public:
-    static crow::middleware::context Default() {
-        return crow::middleware::context([](crow::request& req, crow::response& res, crow::context& /* ctx */) {
-            // Generate request ID based on URI, IP, User-Agent, and timestamp
-            std::string uri = req.url;
-            std::string ip = req.remote_endpoint().address().to_string();
-            std::string ua = req.get_header_value("User-Agent");
-            auto now = std::chrono::system_clock::now();
-            auto time_us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    static void handle_request(const crow::request& req, crow::response& res) {
+        // Extract necessary request data
+        std::string host = req.get_header_value("Host");
+        std::string uri = req.url;
+        std::string ip = req.remote_ip_address;
+        std::string ua = req.get_header_value("User-Agent");
 
-            // Compute SHA1 hash for RequestID
-            std::string request_id = computeSHA1(uri + ip + ua + std::to_string(time_us));
-            res.add_header("Cyno-RequestID", request_id);
+        // Set headers with SHA-1 encoded values
+        set_headers(res, uri, ip, ua, host);
 
-            // Compute SHA1 hash for ClientID
-            std::string host = req.get_header_value("Host");
-            std::string client_id = computeSHA1(host + ip + ua);
-            res.add_header("Cyno-ClientID", client_id);
+        bool locked = false;  // Customize this logic as needed
+        auto current_time = std::chrono::system_clock::now();
 
-            // Check if request is locked
-            bool locked = false;
-            auto current_time = std::chrono::system_clock::to_time_t(now);
-
-            if (req.url != "/404" && locked) {
-                res.code = crow::status::FORBIDDEN;
-                res.write(crow::json::wvalue{
-                    {"code", -1},
-                    {"stable", false},
-                    {"message", "大风机关赛诺盯上你了(您的网络环境存在安全风险 我们无法提供服务)[Errno -1]"},
-                    {"time", std::put_time(std::gmtime(&current_time), "%Y-%m-%d %H:%M:%S")},
-                    {"requestID", request_id},
-                    {"clientID", client_id}
-                }.dump());
-                res.end();
-                return;
-            }
-            res.next();
-        });
+        if (req.url != "/404" && locked) {
+            send_locked_response(res, current_time);
+        } else {
+            res.write("Request processed successfully");
+            res.end();
+        }
     }
 
 private:
-    static std::string computeSHA1(const std::string& input) {
+    static std::string generate_sha1(const std::string& data) {
         unsigned char hash[SHA_DIGEST_LENGTH];
-        SHA1(reinterpret_cast<const unsigned char*>(input.c_str()), input.size(), hash);
-        std::ostringstream os;
-        for (int i = 0; i < SHA_DIGEST_LENGTH; ++i)
-            os << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
-        return os.str();
+        SHA1(reinterpret_cast<const unsigned char*>(data.c_str()), data.size(), hash);
+
+        std::ostringstream ss;
+        for (int i = 0; i < SHA_DIGEST_LENGTH; ++i) {
+            ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+        }
+        return ss.str();
+    }
+
+    static void set_headers(crow::response& res, const std::string& uri, const std::string& ip,
+                            const std::string& ua, const std::string& host) {
+        auto current_time = std::chrono::system_clock::now();
+        auto time_in_micro = std::chrono::duration_cast<std::chrono::microseconds>(current_time.time_since_epoch()).count();
+
+        // Generate Cyno-RequestID
+        std::string request_id_data = uri + ip + ua + std::to_string(time_in_micro);
+        res.set_header("Cyno-RequestID", generate_sha1(request_id_data));
+
+        // Generate Cyno-ClientID
+        std::string client_id_data = host + ip + ua;
+        res.set_header("Cyno-ClientID", generate_sha1(client_id_data));
+    }
+
+    static void send_locked_response(crow::response& res, std::chrono::system_clock::time_point current_time) {
+        res = crow::response(403);
+        res.set_header("Content-Type", "application/json");
+
+        std::string time_str = std::to_string(current_time.time_since_epoch().count());
+        std::string request_id = res.get_header_value("Cyno-RequestID");
+        std::string client_id = res.get_header_value("Cyno-ClientID");
+
+        // Custom JSON response
+        res.write("{\"code\":-1,\"stable\":false,"
+                  "\"message\":\"大风机关赛诺盯上你了(您的网络环境存在安全风险 我们无法提供服务)[Errno -1]\","
+                  "\"time\":\"" + time_str + "\","
+                  "\"requestID\":\"" + request_id + "\","
+                  "\"clientID\":\"" + client_id + "\"}");
+        res.end();
     }
 };
-
-#endif // CYNO_H
 

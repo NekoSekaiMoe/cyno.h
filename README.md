@@ -10,21 +10,12 @@
 #include "cyno.h"
 
 int main() {
-    // Initialize the Crow application
-    crow::App<crow::Cyno> app;
+    crow::SimpleApp app;
 
-    // Define the /ping route
-    CROW_ROUTE(app, "/ping")
-    ([](const crow::request&, crow::response& res) {
-        crow::json::wvalue response_json;
-        response_json["status"] = 200;
-        response_json["ping"] = "pong";
-        
-        res.write(response_json.dump());
-        res.end();
+    CROW_ROUTE(app, "/")([](const crow::request& req, crow::response& res) {
+        CynoHandler::handle_request(req, res);
     });
 
-    // Run the application on port 8080
     app.port(8080).multithreaded().run();
 }
 ```
